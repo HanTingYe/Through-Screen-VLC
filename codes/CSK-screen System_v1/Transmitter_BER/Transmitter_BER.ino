@@ -9,6 +9,7 @@
 #include "pwm_lib.h"
 #include "tc_lib.h"
 #include "CSK_underscreen.h"
+#include "RS-FEC.h"
 //#include <WiseChipHUD.h>
 
 using namespace arduino_due::pwm_lib;
@@ -38,6 +39,7 @@ int brightness = 255;
 int fadeAmount = 5;
 
 int Tx = 0; // Symbol
+int Tx_unit = 0;
 int count = 0; // Number of symbol
 
 
@@ -57,11 +59,103 @@ pwm<pwm_pin::PWMH1_PA19> pwm_pin42;
 // this object used PWM channel 2
 pwm<pwm_pin::PWMH2_PC7> pwm_pin39;
 
-int data[1000];
+boolean data_unit[24];
+boolean char_unit[8];
+boolean *cnt_unit = data_unit;
+boolean *cnt_char_unit = char_unit;
+int data_unit_dec[3];
+char message_unit[3];
+//byte byte_unit[8];
+//byte *cnt_byte_unit = byte_unit;
+//int data[1000];
 int seed = 6;
 int cnt = 1;
 
 
+const int msglen = 12;
+const uint8_t ECC_LENGTH = 6;  //Max message lenght, and "gurdian bytes", Max corrected bytes ECC_LENGTH/2
+char message_frame[msglen]; // The message size would be different, so need a container
+char encoded[msglen + ECC_LENGTH];
+
+
+RS::ReedSolomon<msglen, ECC_LENGTH> rs;
+
+
+String bytesStr;
+String TxStr; // Symbol
+byte bytes[8];
+int bit_count = 0;
+
+
+boolean *bitadd(boolean *p, boolean a, boolean b, boolean c)
+{
+  *p++ = a;
+  *p++ = b;
+  *p++ = c;
+  return (p);
+}
+
+boolean *split_array(boolean *p, boolean *q)
+{
+  for (int i = 0; i < 8; i++)
+  {
+    *p++ = *q++;
+  }
+  return (q);
+}
+
+int convertBinToDec(boolean Bin[]) {
+  int ReturnInt = 0;
+  for (int i = 0; i < 8; i++) {
+    if (Bin[7 - i]) {
+      ReturnInt += 1 << i;
+    }
+  }
+  return ReturnInt;
+}
+
+//boolean Bin[8]={0}; Needs to be initialized
+void convertDecToBin(int Dec, boolean Bin[]) {
+
+  for (int i = 7; i >= 0; i--) {
+    if (Dec) {
+      Bin[i] = Dec & 1;
+    }
+    Dec >>= 1;
+  }
+
+  //  for (int i = 7 ; i >= 0 ; i--) {
+  //    if (pow(2, i) <= Dec) {
+  //      Dec = Dec - pow(2, i);
+  //      Bin[8 - (i + 1)] = 1;
+  //    } else {
+  //    }
+  //  }
+}
+
+
+int *int2byte(int *p, byte *q)
+{
+  int i = 0;
+  while (i < 8)
+  {
+    *q++ = *p++;
+    i++;
+  }
+  return (p);
+}
+
+char ByteToChar( byte p_ucVal )
+{
+  switch (p_ucVal)
+  {
+    case 0:
+      return '0';
+
+    case 1:
+      return '1';
+  }
+}
 
 
 /*Transmitter color set up*/
@@ -70,15 +164,12 @@ void setColor(int red, int green, int blue)
   led1.set_duty(red);
   led2.set_duty(green);
   led3.set_duty(blue);
-  delayMicroseconds(500);
-  //delay(5);
+  //delayMicroseconds(500);
+  delay(1);
 }
 
 
 void setup() {
-
-  //  myOLED.begin();
-  //  myOLED.clearAll(); // Clears all of the segments
 
   Serial.begin(250000);
 
@@ -89,7 +180,80 @@ void setup() {
 
   randomSeed(seed);
 
-  // 
+  while (Tx_unit < 8)
+  {
+    switch (Tx_unit)
+    {
+      case 0: cnt_unit = bitadd(cnt_unit, 0, 0, 0); break;
+      case 1: cnt_unit = bitadd(cnt_unit, 0, 0, 1); break;
+      case 2: cnt_unit = bitadd(cnt_unit, 0, 1, 0); break;
+      case 3: cnt_unit = bitadd(cnt_unit, 0, 1, 1); break;
+      case 4: cnt_unit = bitadd(cnt_unit, 1, 0, 0); break;
+      case 5: cnt_unit = bitadd(cnt_unit, 1, 0, 1); break;
+      case 6: cnt_unit = bitadd(cnt_unit, 1, 1, 0); break;
+      case 7: cnt_unit = bitadd(cnt_unit, 1, 1, 1); break;
+    }
+
+    Tx_unit++;
+  }
+  cnt_unit = data_unit;
+  for (int i = 0; i < 3; i++) {
+    cnt_unit = split_array(cnt_char_unit, cnt_unit);
+    data_unit_dec[i] = convertBinToDec(char_unit);
+  }
+  for (int i = 0; i < 3; i++) {
+    message_unit[i] = (char) data_unit_dec[i];
+  }
+
+
+  char temp[3];
+  strcpy(temp, message_unit);
+
+  for (int i = 0; i < (4 - 1); i++)
+  {
+    strcat(temp, message_unit);
+  }
+  strcpy(message_frame, temp);
+
+  //
+  //  for (int i = 0; i < 4; i++)
+  //  {
+  //    for (int j = 0; j < 3; i++)
+  //      message_frame[3 * i + j] = message_unit[j];
+  //  }
+
+  //  for (int i = 0; i < 12; i++) {
+  //    Serial.print(message_frame[i]);
+  //    }
+
+  rs.Encode(message_frame, encoded);
+
+  Serial.print("Original: "); Serial.println(message_frame);
+  Serial.print("Encoded:  ");
+  for (int i = 0; i < sizeof(encoded); i++) {
+    Serial.print(encoded[i]);
+  }
+  //
+  for (int message_count = 0; message_count <= (msglen + ECC_LENGTH - 1); message_count++)
+  {
+    //char myChar = message.charAt(message_count);
+    for (int i = 7; i >= 0; i--) {
+      bytes[7 - i] = bitRead(encoded[message_count], i); // bit number
+    }
+    //char bytes;
+    char bytesChar[8];
+    for (int i = 0; i <= 7; i++) {
+      bytesChar[i] = ByteToChar(bytes[i]);
+    }
+    bytesChar[8] = '\0';
+    bytesStr += bytesChar;
+
+  }
+
+
+  Serial.println("");
+  Serial.println(bytesStr);
+
   for (int i = 1; i < 8; i++) {
     setColor(100, 0, 0);
   }
@@ -105,100 +269,34 @@ void loop() {
 
 
 
+  TxStr = bytesStr.substring(bit_count, (bit_count + 3));
+  Tx = TxStr.toInt();
   switch (Tx)
   {
     case 0: setColor(CSK0_R_8, CSK0_G_8, CSK0_B_8); break;
     case 1: setColor(CSK1_R_8, CSK1_G_8, CSK1_B_8); break;
-    case 2: setColor(CSK2_R_8, CSK2_G_8, CSK2_B_8); break;
-    case 3: setColor(CSK3_R_8, CSK3_G_8, CSK3_B_8); break;
-    case 4: setColor(CSK4_R_8, CSK4_G_8, CSK4_B_8); break;
-    case 5: setColor(CSK5_R_8, CSK5_G_8, CSK5_B_8); break;
-    case 6: setColor(CSK6_R_8, CSK6_G_8, CSK6_B_8); break;
-    case 7: setColor(CSK7_R_8, CSK7_G_8, CSK7_B_8); break;
+    case 10: setColor(CSK2_R_8, CSK2_G_8, CSK2_B_8); break;
+    case 11: setColor(CSK3_R_8, CSK3_G_8, CSK3_B_8); break;
+    case 100: setColor(CSK4_R_8, CSK4_G_8, CSK4_B_8); break;
+    case 101: setColor(CSK5_R_8, CSK5_G_8, CSK5_B_8); break;
+    case 110: setColor(CSK6_R_8, CSK6_G_8, CSK6_B_8); break;
+    case 111: setColor(CSK7_R_8, CSK7_G_8, CSK7_B_8); break;
   }
-
-  //Serial.println(Tx);
-  Tx++;
-  if (Tx > 7) {
-    Tx = 0;
+  bit_count = bit_count + 3;
+  //Serial.println(bit_count);
+  if (bit_count > ((msglen + ECC_LENGTH) * 8 - 1))
+  {
+    bit_count = 0;
+    //Serial.println(bit_count);
+    //while (1) {};
   }
 
   // Random method
 
   //  data[cnt] = random(0, 8);
-  //  Serial.println(cnt);
+  //Serial.println(cnt);
   //  cnt ++;
   //  if (cnt > 1000)
   //    cnt = 1;
 
 }
-
-
-
-//    // changing duty in pwm output pin 35
-//    change_duty(pwm_pin35, PWM_DUTY_PIN_35);
-//
-//    // changing duty in pwm output pin 42
-//    change_duty(pwm_pin42, PWM_DUTY_PIN_42);
-//
-//    // changing duty in pwm output pin 39
-//    change_duty(pwm_pin39, PWM_DUTY_PIN_39);
-//    //while (1) {}
-
-
-//setColor(0, 0, 100);
-
-/*Screen module*/
-
-//i = 231
-//Red  81
-
-//  for (int i = 81; i < 82; i++) {
-//    myOLED.AdjustIconLevel(i, j);
-//  }
-
-
-//Green 182-214   except for 198-211
-/*for (int i = 182; i < 198; i++) {
-  myOLED.AdjustIconLevel(i, j);
-  }
-  for (int i = 211; i < 214; i++) {
-  myOLED.AdjustIconLevel(i, j);
-  }*/
-
-//For all component
-
-//  for (int i = 0; i < 231; i++) {
-//    myOLED.AdjustIconLevel(i, j);
-//  }
-
-//while (1) {}
-
-
-//    switch (Tx)
-//    {
-//      case 0: setColor(brightness, 0, 0); break;
-//      case 1: setColor(0, brightness, 0); break;
-//      case 2: setColor(0, 0, brightness); break;
-//      case 3: setColor(brightness, brightness, brightness); break;
-//    }
-//    //delayMicroseconds(250);
-//    //delay(5000);
-//
-//
-//    brightness = brightness - fadeAmount;
-//    if (brightness == 0)
-//    {
-//      brightness = 255;
-//    }
-//
-//    Tx++;
-//    if (Tx > 3) {
-//      Tx = 0;
-//    }
-
-//  brightness = brightness - fadeAmount;
-//  if (brightness==0)
-//  {
-//  brightness=255;
-//  }

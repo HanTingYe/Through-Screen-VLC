@@ -2,7 +2,7 @@
 
 This repository is the official implementation of "[SpiderWeb: Enabling Through-Screen Visible Light Communication](https://doi.org/10.1145/3485730.3485948)"
 in the ACM Conference on Embedded Networked Sensor Systems (SenSys) 2021 
-![Generic badge](https://img.shields.io/badge/code-official-green.svg)
+![Generic badge](https://img.shields.io/badge/code-official-green.svg)[![DOI](https://zenodo.org/badge/679340304.svg)](https://zenodo.org/badge/latestdoi/679340304)
 
 
 ## Introduction
